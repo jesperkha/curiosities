@@ -1,1 +1,1 @@
-# My blog
+# Curiosities

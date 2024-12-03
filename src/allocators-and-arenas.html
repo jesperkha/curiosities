@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Allocators and arenas</title>
+		<link rel="stylesheet" href="../templates/theme.css" />
+		<link rel="stylesheet" href="../templates/global.css" />
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&family=Prata&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<div class="center">
+			<div class="nav">
+				<a href="javascript:history.back()">Go Back</a>
+				<p>|</p>
+				<a href="/curiosities">Index</a>
+				<p>|</p>
+				<p>Allocators and arenas</p>
+			</div>
+			<h1>Better memory management in C</h1>
+<p>If you are familiar with modern C programming &quot;standards&quot; you may have come across the terms <em>arena</em> and <em>allocator</em>. They are both objects used for stricter control over how memory is allocated, used, and freed in a program. Some newer languages implement these in the standard library, <a href="https://zig.guide/standard-library/allocators/">like zig</a>. This article contains an explanation for both, and examples of implementations.</p>
+<h2>See you later allocator</h2>
+<p>The C standard library already contains an implementation for a basic slap heap allocator: <code>malloc</code>. The utilities provided were cutting edge at the time of creation and provided dynamic memory allocation of arbitrary sizes, with minimal fragmentation.</p>
+<p>However, certain constraints and pitfalls come with having a universally available allocator. One example could be hidden and obfuscated allocations:</p>
+<div class="highlight c"><pre><span></span><span class="c1">// Does this function allocate and return heap memory?</span>
+<span class="c1">// Or does it return a pointer to a global buffer?</span>
+<span class="c1">// Does the memory at s have any specific permissions?</span>
+<span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_user_input</span><span class="p">();</span>
+</pre></div>
+<p>To give the user more control and a better overview of how memory is managed, allocators are used:</p>
+<div class="highlight c"><pre><span></span><span class="n">Allocator</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_heap_allocator</span><span class="p">();</span>
+
+<span class="c1">// We now know that the function allocates memory</span>
+<span class="c1">// and that the memory allocated has permissions</span>
+<span class="c1">// defined in the heap allocator implementation.</span>
+<span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_user_input</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+</pre></div>
+<p>The allocator struct looks like some magic object here, but is actually very simple:</p>
+<div class="highlight c"><pre><span></span><span class="k">typedef</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Allocator</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">AllocatorProc</span><span class="w"> </span><span class="n">proc</span><span class="p">;</span><span class="w"> </span><span class="c1">// Pointer to a function that does the allocation</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">data</span><span class="p">;</span><span class="w">         </span><span class="c1">// Data used by the allocator for context</span>
+<span class="p">}</span><span class="w"> </span><span class="n">Allocator</span><span class="p">;</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">heap_allocator_proc</span><span class="p">(</span><span class="n">Allocator</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">AllocatorMessage</span><span class="w"> </span><span class="n">msg</span><span class="p">,</span><span class="w"> </span><span class="n">u64</span><span class="w"> </span><span class="n">size</span><span class="p">,</span><span class="w"> </span><span class="p">...)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="no">MSG_ALLOC</span><span class="p">:</span>
+<span class="w">            </span><span class="c1">// ...</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="no">MSG_FREE</span><span class="p">:</span>
+<span class="w">            </span><span class="c1">// ...</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="no">MSG_REALLOC</span><span class="p">:</span>
+<span class="w">            </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">HeapAllocatorData</span><span class="w"> </span><span class="n">heap_data</span><span class="p">;</span>
+
+<span class="n">Allocator</span><span class="w"> </span><span class="nf">get_heap_allocator</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">(</span><span class="n">Allocator</span><span class="p">){</span>
+<span class="w">        </span><span class="p">.</span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">void</span><span class="o">*</span><span class="p">)</span><span class="n">heap_data</span><span class="p">,</span>
+<span class="w">        </span><span class="p">.</span><span class="n">proc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">heap_allocator_proc</span><span class="p">,</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+
+</pre></div>
+<div class="highlight c"><pre><span></span><span class="c1">// An implementation of strdup without the hidden allocations</span>
+<span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="nf">string_dup</span><span class="p">(</span><span class="n">Allocator</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">original</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">dup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">alloc</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">strlen</span><span class="p">(</span><span class="n">original</span><span class="p">));</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">strcpy</span><span class="p">(</span><span class="n">dup</span><span class="p">,</span><span class="w"> </span><span class="n">original</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+<p>Now you can have multiple allocators that allocate memory in different ways and use them interchangeably! You will also see explicitly which functions allocate memory, and you can even choose how they do so.</p>
+<h2>Entering the arena</h2>
+<p>For a detailed explanation of arenas check out <a href="https://www.rfleury.com/p/untangling-lifetimes-the-arena-allocator">this article by Ryan Fleury</a>. The following explanation is slightly different, but the idea is the same.</p>
+<p>The problem: remembering to free after every allocation can be tricky, and even more so if multiple allocations are made behind the scenes by some utility functions. The solution: memory arenas. When combined with the previously defined <code>Allocator</code>, arenas offer straightforward cleanup and scope management.</p>
+<p>Arenas are essentially temporary buckets you can fill with data, and then free all at once, making all allocations in the current scope tied to a single source.</p>
+<div class="highlight c"><pre><span></span><span class="n">Arena</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">new_arena</span><span class="p">(</span><span class="mi">1024</span><span class="p">);</span>
+
+<span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">arena_alloc</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">);</span>
+<span class="kt">float</span><span class="w"> </span><span class="o">*</span><span class="n">temperatures</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">arena_alloc</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">);</span>
+
+<span class="c1">// Remember how the string_dup function earlier took an allocator as a parameter?</span>
+<span class="c1">// Well, now we can make it use the arena to allocate the duplicate string,</span>
+<span class="c1">// which means it will also be freed along with everything else.</span>
+<span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">name_duplicate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">string_dup</span><span class="p">(</span><span class="n">get_arena_allocator</span><span class="p">(</span><span class="n">a</span><span class="p">),</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
+
+<span class="n">arena_free</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+</pre></div>
+
+		</div>
+	</body>
+</html>

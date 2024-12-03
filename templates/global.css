@@ -1,6 +1,7 @@
 .center {
 	margin: auto;
 	width: 40%;
+	min-width: 500px;
 	font-family: "Source Serif 4", serif;
 	font-optical-sizing: auto;
 	color: #171717;
@@ -16,6 +17,7 @@ pre,
 code {
 	font-family: "Fira Code", arial;
 	font-size: small;
+	overflow-x: auto;
 }
 
 pre {

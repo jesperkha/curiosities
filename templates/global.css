@@ -1,11 +1,16 @@
 .center {
 	margin: auto;
 	width: 40%;
-	min-width: 500px;
 	font-family: "Source Serif 4", serif;
 	font-optical-sizing: auto;
 	color: #171717;
 	margin-bottom: 25vh;
+}
+
+@media screen and (max-width: 1000px) {
+	.center {
+		width: 90%;
+	}
 }
 
 p,

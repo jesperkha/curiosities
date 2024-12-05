@@ -19,7 +19,11 @@ def page_md_to_html(filename: str, out_dir: str, template_file: str):
         md = f.read()
         if filename == "index.md":
             entries = ""
-            for file in os.listdir("pages"):
+            files = os.listdir("pages")
+            files = [f"pages/{name}" for name in files]
+            files = sorted(files, key=os.path.getmtime, reverse=True)
+            for file in files:
+                file = file.removeprefix("pages/")
                 if file == "index.md":
                     continue
 

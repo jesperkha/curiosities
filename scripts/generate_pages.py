@@ -11,7 +11,7 @@ def filename_to_title(filename: str) -> str:
 
 def replace_image_template(html):
     pattern = r"<p>\{IMAGE ([^}]+)\}</p>"
-    replaced_html = re.sub(pattern, r'<img src="../.github/\1">', html)
+    replaced_html = re.sub(pattern, r'<img src="assets/\1">', html)
     return replaced_html
 
 def page_md_to_html(filename: str, out_dir: str, template_file: str):

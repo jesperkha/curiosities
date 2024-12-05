@@ -3,6 +3,8 @@ import re
 from datetime import datetime
 import markdown_code_blocks
 
+DEV = False
+
 def template(source: str, name: str, insert: str) -> str:
     return source.replace("{"+name+"}", insert) 
 
@@ -11,7 +13,8 @@ def filename_to_title(filename: str) -> str:
 
 def replace_image_template(html):
     pattern = r"<p>\{IMAGE ([^}]+)\}</p>"
-    replaced_html = re.sub(pattern, r'<img src="assets/\1">', html)
+    if DEV: replaced_html = re.sub(pattern, r'<img src="../assets/\1">', html)
+    else: replaced_html = re.sub(pattern, r'<img src="/curiosities/assets/\1">', html)
     return replaced_html
 
 def page_md_to_html(filename: str, out_dir: str, template_file: str):

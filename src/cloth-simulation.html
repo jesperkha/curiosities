@@ -27,7 +27,7 @@
 <p>Making a simple cloth simulation is relatively straightforward. It involves estimating the position of multiple points in a grid using a method known as <a href="https://en.wikipedia.org/wiki/Euler_method">Euler's method</a>.</p>
 <p>Let's say we have a grid of points, where each point <code>p</code> has a position and previous position vector. We want to estimate where this point will be in the next time step <code>t</code>. To do this, we calculate a &quot;velocity&quot; as <code>vel = current_pos - old_pos</code>. We set the current position as <code>old_pos</code> and add the velocity to the current position.</p>
 <p>By also adding a small gravity constant to the points <code>y</code> velocity we get a falling grid of points:</p>
-<img src="assets/clothsim/falling_points.gif">
+<img src="/curiosities/assets/clothsim/falling_points.gif">
 <h2>Point recalibration</h2>
 <p>Now for the <em>harder</em> part. To simulate the elasticity, we need to make sure neighboring points try to stay together. To do this, we calculate the delta distance between the two points, find the desired distance between them, and compute an offset proportional to the displacement. Here's some pseudo code:</p>
 <div class="highlight py"><pre><span></span><span class="c1"># For each line connecting two points</span>
@@ -54,7 +54,7 @@
 </pre></div>
 <p>Notice how we added a check to see if a point is pinned. Pinned points should not be affected by any forces, so you can simply ignore them when updating point positions.</p>
 <p>With this new functionality forcing points to stay close to each other, line rendering, and some simple wind physics, we get a pretty good looking cloth simulation:</p>
-<img src="assets/clothsim/final.gif">
+<img src="/curiosities/assets/clothsim/final.gif">
 <p>You can change the stiffness of the cloth by adjusting the number of times you run the point recalibration in with each iteration.</p>
 
 		</div>

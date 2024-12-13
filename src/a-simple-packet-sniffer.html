@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>A simple packet sniffer</title>
+		<link rel="stylesheet" href="../templates/theme.css" />
+		<link rel="stylesheet" href="../templates/global.css" />
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&family=Prata&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<div class="center">
+			<div class="nav">
+				<a href="javascript:history.back()">Go Back</a>
+				<p>|</p>
+				<a href="/curiosities">Index</a>
+				<p>|</p>
+				<p>A simple packet sniffer</p>
+			</div>
+			<h1>A simple packet sniffer in C</h1>
+<p>If you are familiar with computer networking, you know that data packets are not actually sent only to the machine they are meant for, but are instead broadcast to the local network, and it is up to the NIC (Network Interface Card) to drop packets not meant for your computer. This allows us to be a bit <em>promiscuous</em>, which is also the name of the flag that disables this filter.</p>
+<h2>Capturing raw Ethernet frames</h2>
+<p>Before we capture traffic on the whole network, let us start with our own machine. With the following code we create a socket that gives us raw ethernet frames fresh from the kernel:</p>
+<div class="highlight c"><pre><span></span><span class="kt">int</span><span class="w"> </span><span class="n">sock_fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">socket</span><span class="p">(</span><span class="n">PF_PACKET</span><span class="p">,</span><span class="w"> </span><span class="n">SOCK_RAW</span><span class="p">,</span><span class="w"> </span><span class="n">htons</span><span class="p">(</span><span class="n">ETH_P_ALL</span><span class="p">));</span><span class="w"></span>
+</pre></div>
+<ul>
+<li><code>PF_PACKET</code>: Just get the raw packet data. No TCP/UDP parsing.</li>
+<li><code>SOCK_RAW</code>: Required to use <code>PF_PACKET</code>.</li>
+<li><code>ETH_P_ALL</code>: Get a socket that captures traffic from all network protocols.</li>
+</ul>
+<p>Next we need to bind the socket to a network device. You can find a list of network device names with the <code>ifconfig</code> command. The one on my machine is called <code>wlo1</code>.</p>
+<div class="highlight c"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">device_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;wlo1&quot;</span><span class="p">;</span><span class="w"></span>
+<span class="n">setsockopt</span><span class="p">(</span><span class="n">sock_fd</span><span class="p">,</span><span class="w"> </span><span class="n">SOL_SOCKET</span><span class="p">,</span><span class="w"> </span><span class="n">SO_BINDTODEVICE</span><span class="p">,</span><span class="w"> </span><span class="n">device_name</span><span class="p">,</span><span class="w"> </span><span class="n">strlen</span><span class="p">(</span><span class="n">device_name</span><span class="p">)</span><span class="o">+</span><span class="mi">1</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+<p>That's it! Reading from the socket with <code>recv()</code> will give raw packet data for any packets aimed at this machine. Note that you may need to run the program as root.</p>
+<h2>Promiscuous mode</h2>
+<p>To capture all traffic on the network we need to enable <em>promiscuous mode</em>. This is a flag that instructs the kernel to tell the NIC not to drop packets not meant for us. Here is a function that enables it for a given socket:</p>
+<div class="highlight c"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">enable_promiscuous_mode</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">sock_fd</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">device_name</span><span class="p">)</span><span class="w"></span>
+<span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">ifreq</span><span class="w"> </span><span class="n">ethreq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">};</span><span class="w"></span>
+<span class="w">    </span><span class="n">strncpy</span><span class="p">(</span><span class="n">ethreq</span><span class="p">.</span><span class="n">ifr_name</span><span class="p">,</span><span class="w"> </span><span class="n">device_name</span><span class="p">,</span><span class="w"> </span><span class="n">IF_NAMESIZE</span><span class="p">);</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Get current flags for this socket</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ioctl</span><span class="p">(</span><span class="n">sock_fd</span><span class="p">,</span><span class="w"> </span><span class="n">SIOCGIFFLAGS</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">ethreq</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">-1</span><span class="p">)</span><span class="w"></span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Set the promisc flag</span>
+<span class="w">    </span><span class="n">ethreq</span><span class="p">.</span><span class="n">ifr_flags</span><span class="w"> </span><span class="o">|=</span><span class="w"> </span><span class="n">IFF_PROMISC</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ioctl</span><span class="p">(</span><span class="n">sock_fd</span><span class="p">,</span><span class="w"> </span><span class="n">SIOCSIFFLAGS</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">ethreq</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">-1</span><span class="p">)</span><span class="w"></span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<p>If you are wondering, <code>SIOCGIFFLAGS</code> means Socket I/O Control Get Interface Flags, and the same with <em>set</em> for <code>SIOCSIFF</code>. Truly an intuitive naming convention.</p>
+<p>With this set up, you can capture all traffic on the local network and spy on your friends and family!</p>
+<p><a href="https://gist.github.com/jesperkha/fc8f375fc5566b129f8899f86d9d01c9">Full example.</a></p>
+
+		</div>
+	</body>
+</html>

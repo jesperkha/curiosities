@@ -24,7 +24,7 @@
 				<p>Handler with context</p>
 			</div>
 			<h1>Go HTTP handler with context</h1>
-<p>One thing that I find is missing from Go's <code>http</code> library is some sort of context passed through the request handler chain. Obviously there is a <code>context.Context</code> attached to the <code>Request</code> given, but using a <code>any</code> map to access data is cumbersome and not very 'clean'.</p>
+<p>One thing that I find is missing from Go's <code>http</code> library is some sort of context passed through the request handler chain. Obviously there is a <code>context.Context</code> attached to the <code>Request</code> given, but using an <code>any</code> map to access data is cumbersome and not very 'clean'.</p>
 <p>This article shows how you can make a new type of handler with a context, and how this unlocks all sorts of other benefits.</p>
 <h2>Context</h2>
 <p>First, lets define our context. This struct will wrap the standard <code>http.ResponseWriter</code> and <code>*http.Request</code> duo and supply additional utility methods.</p>

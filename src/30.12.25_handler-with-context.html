@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Handler with context</title>
+		<link rel="stylesheet" href="../templates/theme.css" />
+		<link rel="stylesheet" href="../templates/global.css" />
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&family=Prata&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<div class="center">
+			<div class="nav">
+				<a href="javascript:history.back()">Go Back</a>
+				<p>|</p>
+				<a href="/curiosities">Index</a>
+				<p>|</p>
+				<p>Handler with context</p>
+			</div>
+			<h1>Go HTTP handler with context</h1>
+<p>One thing that I find is missing from Go's <code>http</code> library is some sort of context passed through the request handler chain. Obviously there is a <code>context.Context</code> attached to the <code>Request</code> given, but using an <code>any</code> map to access data is cumbersome and not very 'clean'.</p>
+<p>This article shows how you can make a new type of handler with a context, and how this unlocks all sorts of other benefits.</p>
+<h2>Context</h2>
+<p>First, lets define our context. This struct will wrap the standard <code>http.ResponseWriter</code> and <code>*http.Request</code> duo and supply additional utility methods.</p>
+<p>The magic happens when you implement <code>http.ResponseWriter</code> for <code>Context</code>. This allows it to propagate through the handler chain and keep state along the way.</p>
+<p>You can also implement <code>context.Context</code> if you like, but simply having a getter method for the requests context works fine.</p>
+<div class="highlight go"><pre><span></span><span class="c1">// server/context.go</span><span class="w"></span>
+<span class="kn">package</span><span class="w"> </span><span class="nx">server</span><span class="w"></span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="o">...</span><span class="w"></span>
+<span class="p">)</span><span class="w"></span>
+
+<span class="kd">type</span><span class="w"> </span><span class="nx">Context</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">R</span><span class="w">         </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// Context implemenents ResponseWriter so we</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// should always pass this instead of w.</span><span class="w"></span>
+<span class="w">    </span><span class="nx">w</span><span class="w">         </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="w"></span>
+<span class="w">    </span><span class="nx">status</span><span class="w">    </span><span class="kt">int</span><span class="w"></span>
+<span class="w">    </span><span class="nx">err</span><span class="w">       </span><span class="kt">error</span><span class="w"></span>
+<span class="w">    </span><span class="nx">bytes</span><span class="w">     </span><span class="kt">int</span><span class="w"></span>
+<span class="w">    </span><span class="nx">createdAt</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">newContext</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Context</span><span class="p">{</span><span class="nx">r</span><span class="p">,</span><span class="w"> </span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="mi">200</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">()}</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">ReuseOrNewContext</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">w</span><span class="p">.(</span><span class="o">*</span><span class="nx">Context</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// r may have changed with shallow copy in r.WithContext().</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// The request is still the same, but we need to update the reference.</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">ctx</span><span class="p">.</span><span class="nx">R</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="w"></span>
+<span class="w">    	</span><span class="k">return</span><span class="w"> </span><span class="nx">ctx</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">newContext</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Implement http.ResponseWriter</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">WriteHeader</span><span class="p">(</span><span class="nx">code</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">code</span><span class="w"></span>
+<span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">w</span><span class="p">.</span><span class="nx">WriteHeader</span><span class="p">(</span><span class="nx">code</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Implement http.ResponseWriter</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Write</span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// If WriteHeader was never called, default is 200</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusOK</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">bytes</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">b</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">w</span><span class="p">.</span><span class="nx">Write</span><span class="p">(</span><span class="nx">b</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Implement http.ResponseWriter</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Header</span><span class="p">()</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Header</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">w</span><span class="p">.</span><span class="nx">Header</span><span class="p">()</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<h2>Handler</h2>
+<p>Our new <code>Handler</code> type is quite simple:</p>
+<div class="highlight go"><pre><span></span><span class="c1">// server/handler.go</span><span class="w"></span>
+<span class="kn">package</span><span class="w"> </span><span class="nx">server</span><span class="w"></span>
+
+<span class="kn">import</span><span class="w"> </span><span class="s">&quot;net/http&quot;</span><span class="w"></span>
+
+<span class="kd">type</span><span class="w"> </span><span class="nx">Handler</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"></span>
+
+<span class="c1">// Implement http.Handler</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">h</span><span class="w"> </span><span class="nx">Handler</span><span class="p">)</span><span class="w"> </span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ReuseOrNewContext</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span><span class="w"> </span><span class="c1">// Context is now passed down through http.Handlers</span><span class="w"></span>
+<span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">h</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Since our Handler implements http.Handler, any http middleware will work.</span><span class="w"></span>
+<span class="kd">type</span><span class="w"> </span><span class="nx">Middleware</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">h</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="p">)</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="w"></span>
+</pre></div>
+<p>Note that the returned error is ignored by <code>ServeHTTP</code>. This is fine as the <code>Error()</code> method already writes to the response as we will see later. The reason it is returned is to avoid an extra line per early return (instead of writing error and then returning you simply return error), and also to extract errors in middleware.</p>
+<p>Additionally, the <code>Handler</code> is always responsible for writing the response. The returned error is <em>only</em> for convencience and should <em>always</em> be returned through <code>ctx.Error()</code>. Forgetting this will result in silent errors/failures unless you have logging middleware to track it.</p>
+<h2>Mux</h2>
+<p>Our mux will wrap a <code>chi.Mux</code> (or any other mux including the standard http one). The only difference here is that we apply middleware, and that the <code>Handle</code> method accepts our <code>Handler</code> type instead of a <code>http.HandlerFunc</code>.</p>
+<div class="highlight go"><pre><span></span><span class="kn">package</span><span class="w"> </span><span class="nx">server</span><span class="w"></span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;net/http&quot;</span><span class="w"></span>
+
+<span class="w">    </span><span class="s">&quot;github.com/go-chi/chi/v5&quot;</span><span class="w"></span>
+<span class="w">    </span><span class="nx">chiMiddleware</span><span class="w"> </span><span class="s">&quot;github.com/go-chi/chi/v5/middleware&quot;</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;github.com/go-chi/cors&quot;</span><span class="w"></span>
+<span class="p">)</span><span class="w"></span>
+
+<span class="kd">type</span><span class="w"> </span><span class="nx">Mux</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">mux</span><span class="w">         </span><span class="o">*</span><span class="nx">chi</span><span class="p">.</span><span class="nx">Mux</span><span class="w"></span>
+<span class="w">    </span><span class="nx">middlewares</span><span class="w"> </span><span class="p">[]</span><span class="nx">Middleware</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">NewMux</span><span class="p">(</span><span class="nx">middlewares</span><span class="w"> </span><span class="o">...</span><span class="nx">Middleware</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Mux</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">mux</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chi</span><span class="p">.</span><span class="nx">NewMux</span><span class="p">()</span><span class="w"></span>
+
+<span class="w">    </span><span class="nx">mux</span><span class="p">.</span><span class="nx">Use</span><span class="p">(</span><span class="nx">chiMiddleware</span><span class="p">.</span><span class="nx">StripSlashes</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="nx">mux</span><span class="p">.</span><span class="nx">Use</span><span class="p">(</span><span class="nx">cors</span><span class="p">.</span><span class="nx">Handler</span><span class="p">(</span><span class="nx">cors</span><span class="p">.</span><span class="nx">Options</span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">AllowedOrigins</span><span class="p">:</span><span class="w">   </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://*&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;http://*&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">AllowedMethods</span><span class="p">:</span><span class="w">   </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;GET&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;POST&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;PUT&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;DELETE&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;OPTIONS&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">AllowedHeaders</span><span class="p">:</span><span class="w">   </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;Accept&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Authorization&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Content-Type&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;X-Admin-Key&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">ExposedHeaders</span><span class="p">:</span><span class="w">   </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;Content-Length&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Content-Type&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">AllowCredentials</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="p">}))</span><span class="w"></span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Mux</span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">mux</span><span class="p">:</span><span class="w">         </span><span class="nx">mux</span><span class="p">,</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">middlewares</span><span class="p">:</span><span class="w"> </span><span class="nx">middlewares</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">m</span><span class="w"> </span><span class="o">*</span><span class="nx">Mux</span><span class="p">)</span><span class="w"> </span><span class="nx">applyMiddlewares</span><span class="p">(</span><span class="nx">h</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="p">,</span><span class="w"> </span><span class="nx">middlewares</span><span class="w"> </span><span class="o">...</span><span class="nx">Middleware</span><span class="p">)</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">middlewares</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">h</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">m</span><span class="p">(</span><span class="nx">h</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">middlewares</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">h</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">m</span><span class="p">(</span><span class="nx">h</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">h</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Handle registers a new Handler for the given method/pattern.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">m</span><span class="w"> </span><span class="o">*</span><span class="nx">Mux</span><span class="p">)</span><span class="w"> </span><span class="nx">Handle</span><span class="p">(</span><span class="nx">method</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">pattern</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">h</span><span class="w"> </span><span class="nx">Handler</span><span class="p">,</span><span class="w"> </span><span class="nx">middlewares</span><span class="w"> </span><span class="o">...</span><span class="nx">Middleware</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">m</span><span class="p">.</span><span class="nx">mux</span><span class="p">.</span><span class="nx">MethodFunc</span><span class="p">(</span><span class="nx">method</span><span class="p">,</span><span class="w"> </span><span class="nx">pattern</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">httpH</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">applyMiddlewares</span><span class="p">(</span><span class="nx">h</span><span class="p">,</span><span class="w"> </span><span class="nx">middlewares</span><span class="o">...</span><span class="p">)</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">httpH</span><span class="p">.</span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">})</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Mount mounts a http.Handler to the given pattern.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">m</span><span class="w"> </span><span class="o">*</span><span class="nx">Mux</span><span class="p">)</span><span class="w"> </span><span class="nx">Mount</span><span class="p">(</span><span class="nx">pattern</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">h</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="p">,</span><span class="w"> </span><span class="nx">middleware</span><span class="w"> </span><span class="o">...</span><span class="nx">Middleware</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">h</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">applyMiddlewares</span><span class="p">(</span><span class="nx">h</span><span class="p">,</span><span class="w"> </span><span class="nx">middleware</span><span class="o">...</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="nx">m</span><span class="p">.</span><span class="nx">mux</span><span class="p">.</span><span class="nx">Mount</span><span class="p">(</span><span class="nx">pattern</span><span class="p">,</span><span class="w"> </span><span class="nx">h</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Implement http.Handler</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">m</span><span class="w"> </span><span class="nx">Mux</span><span class="p">)</span><span class="w"> </span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">m</span><span class="p">.</span><span class="nx">mux</span><span class="p">.</span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">ReuseOrNewContext</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">),</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<h2>Middleware</h2>
+<p>One major benefit of this new <code>Handler</code> type is the context aware middleware. <code>Context</code> can keep track of all sorts of state and be read and written in middlewares, like setting auth credentials if the request passed through an authentication middleware.</p>
+<p>Here is a simple logger middleware which simply prints any errors:</p>
+<div class="highlight go"><pre><span></span><span class="c1">// middleware/logger.go</span><span class="w"></span>
+<span class="kn">package</span><span class="w"> </span><span class="nx">middleware</span><span class="w"></span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;errors&quot;</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;net/http&quot;</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;time&quot;</span><span class="w"></span>
+
+<span class="w">    </span><span class="s">&quot;app/server&quot;</span><span class="w"></span>
+<span class="p">)</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">Logger</span><span class="p">(</span><span class="nx">h</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="p">)</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">server</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="nx">start</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">()</span><span class="w"></span>
+<span class="w">        </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Next</span><span class="p">(</span><span class="nx">h</span><span class="p">)</span><span class="w"> </span><span class="c1">// see implementation below</span><span class="w"></span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">            </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="w"></span>
+<span class="w">                </span><span class="s">&quot;request failed. err=%s, time=%s, status=%d&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">                </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">(),</span><span class="w"></span>
+<span class="w">                </span><span class="nx">time</span><span class="p">.</span><span class="nx">Since</span><span class="p">(</span><span class="nx">start</span><span class="p">).</span><span class="nx">String</span><span class="p">(),</span><span class="w"></span>
+<span class="w">                </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Status</span><span class="p">(),</span><span class="w"></span>
+<span class="w">            </span><span class="p">)</span><span class="w"></span>
+<span class="w">        </span><span class="p">}</span><span class="w"></span>
+
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span><span class="w"></span>
+<span class="w">    </span><span class="p">})</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<div class="highlight go"><pre><span></span><span class="c1">// Next calls the given http.Handler with the current context</span><span class="w"></span>
+<span class="c1">// and returns any error set to the context.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Next</span><span class="p">(</span><span class="nx">h</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">h</span><span class="p">.</span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">GetError</span><span class="p">()</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<p>Middleware should never create and pass its own <code>http.ResponseWriter</code>. This would create a new <code>Context</code> and throw away anything written to it in later handlers.</p>
+<h2>Example</h2>
+<p>Simple example using the <code>Mux</code>, <code>Handler</code>, and <code>Middleware</code> together:</p>
+<div class="highlight go"><pre><span></span><span class="kn">package</span><span class="w"> </span><span class="nx">main</span><span class="w"></span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;net/http&quot;</span><span class="w"></span>
+
+<span class="w">    </span><span class="s">&quot;app/server&quot;</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;app/middleware&quot;</span><span class="w"></span>
+<span class="p">)</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// Logger applies to all requests handled by this mux</span><span class="w"></span>
+<span class="w">    </span><span class="nx">mux</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">NewMux</span><span class="p">(</span><span class="nx">middleware</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"></span>
+
+<span class="w">    </span><span class="nx">mux</span><span class="p">.</span><span class="nx">Handle</span><span class="p">(</span><span class="s">&quot;GET&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">server</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">String</span><span class="p">(</span><span class="s">&quot;Hello world!&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">})</span><span class="w"></span>
+
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mux</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<h2>Testing</h2>
+<p>Another great benefit of this pattern is testing. Since the <code>Context</code> is written to along the way, it acts as an even better <code>httptest.ResponseRecorder</code>, and you can even wrap it for double the testing power.</p>
+<div class="highlight go"><pre><span></span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">httptest</span><span class="p">.</span><span class="nx">NewRequest</span><span class="p">(</span><span class="nx">test_method</span><span class="p">,</span><span class="w"> </span><span class="nx">test_path</span><span class="p">,</span><span class="w"> </span><span class="nx">test_body</span><span class="p">)</span><span class="w"></span>
+<span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">handler</span><span class="p">.</span><span class="nx">ReuseOrNewContext</span><span class="p">(</span><span class="nx">httptest</span><span class="p">.</span><span class="nx">NewRecorder</span><span class="p">(),</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span><span class="w"></span>
+
+<span class="nx">test_mux</span><span class="p">.</span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span><span class="w"></span>
+
+<span class="nx">assert</span><span class="p">(</span><span class="nx">ctx</span><span class="p">.</span><span class="nx">GetError</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span><span class="w"></span>
+<span class="nx">assert</span><span class="p">(</span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Status</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">200</span><span class="p">)</span><span class="w"></span>
+<span class="nx">assert</span><span class="p">(</span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Bytes</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">n</span><span class="p">)</span><span class="w"></span>
+<span class="o">...</span><span class="w"></span>
+</pre></div>
+<h2>Context helpers</h2>
+<p>Here's a list of helper methods used on the <code>Context</code>. These can be tailored to your project, which is what makes this pattern so powerful.</p>
+<div class="highlight go"><pre><span></span><span class="c1">// ReadJSON unmarshals the request body and reads into dest.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">ReadJSON</span><span class="p">(</span><span class="nx">dest</span><span class="w"> </span><span class="nx">any</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">NewDecoder</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">.</span><span class="nx">Body</span><span class="p">).</span><span class="nx">Decode</span><span class="p">(</span><span class="nx">dest</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// JSON responds to the request with the json encoding of data.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">JSON</span><span class="p">(</span><span class="nx">data</span><span class="w"> </span><span class="nx">any</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// Write status header if it&#39;s been set to non-default</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="nx">c</span><span class="p">.</span><span class="nx">WriteHeader</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">NewEncoder</span><span class="p">(</span><span class="nx">c</span><span class="p">).</span><span class="nx">Encode</span><span class="p">(</span><span class="nx">data</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">PathValue</span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">.</span><span class="nx">PathValue</span><span class="p">(</span><span class="nx">key</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// PathValueInt requires that the value is an integer.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">PathValueInt</span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">s</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">.</span><span class="nx">PathValue</span><span class="p">(</span><span class="nx">key</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">strconv</span><span class="p">.</span><span class="nx">Atoi</span><span class="p">(</span><span class="nx">s</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="k">return</span><span class="w"> </span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">Error</span><span class="p">(</span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid integer literal: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">),</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusBadRequest</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// To be used instead of &#39;return nil&#39; in handlers for clarity.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Ok</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Context</span><span class="p">()</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">.</span><span class="nx">Context</span><span class="p">()</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">String</span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">Write</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">s</span><span class="p">))</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Error writes an error message to the response writer and sets the status.</span><span class="w"></span>
+<span class="c1">// Returns same error for convenience.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Error</span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">status</span><span class="w"></span>
+<span class="w">    </span><span class="nx">c</span><span class="p">.</span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span><span class="w"></span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">Error</span><span class="p">(</span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">(),</span><span class="w"> </span><span class="nx">status</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">GetError</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">err</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">ServeFile</span><span class="p">(</span><span class="nx">filepath</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">ServeFile</span><span class="p">(</span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">,</span><span class="w"> </span><span class="nx">filepath</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">SetCookie</span><span class="p">(</span><span class="nx">cookie</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Cookie</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">SetCookie</span><span class="p">(</span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">cookie</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Redirect</span><span class="p">(</span><span class="nx">url</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">Redirect</span><span class="p">(</span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">,</span><span class="w"> </span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusSeeOther</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">QueryParam</span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">.</span><span class="nx">URL</span><span class="p">.</span><span class="nx">Query</span><span class="p">().</span><span class="nx">Get</span><span class="p">(</span><span class="nx">key</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Status</span><span class="p">()</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// If using httptest.ResponseRecorder, get status from it</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">recorder</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">w</span><span class="p">.(</span><span class="o">*</span><span class="nx">httptest</span><span class="p">.</span><span class="nx">ResponseRecorder</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    	</span><span class="k">return</span><span class="w"> </span><span class="nx">recorder</span><span class="p">.</span><span class="nx">Code</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">status</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">HeaderValue</span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">R</span><span class="p">.</span><span class="nx">Header</span><span class="p">.</span><span class="nx">Get</span><span class="p">(</span><span class="nx">key</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Lifetime returns the duration since creation.</span><span class="w"></span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Lifetime</span><span class="p">()</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">().</span><span class="nx">Sub</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">createdAt</span><span class="p">)</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">c</span><span class="w"> </span><span class="o">*</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="nx">Bytes</span><span class="p">()</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">bytes</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+<h2>Limitations</h2>
+<p>There are many benefits of this new <code>Handler</code>/<code>Context</code> pattern, but there are also a few limitations to be aware of:</p>
+<ol>
+<li>As mentioned, the <code>Handler</code> must always return an error through <code>ctx.Error()</code>.</li>
+<li>If any middleware replaces <code>Context</code> with some other <code>http.ResponseWriter</code>, the state breaks at that point, and anything written before it will be lost.</li>
+<li>Boilerplate. While this really isn't a lot of code, there is no way to extract it into its own package. The usefulnes of <code>Context</code> depends on the fact that it is implemented differently for each project. And as such, all of the code must be copy-pasted between projects.</li>
+</ol>
+
+		</div>
+	</body>
+</html>
